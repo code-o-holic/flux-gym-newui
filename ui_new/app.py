@@ -247,6 +247,7 @@ def build_train_script(
         sample = f"--sample_prompts={sample_prompts_q} --sample_every_n_steps=\"{sample_every_n_steps}\" {line_break}\n  "
 
     base = f"""accelerate launch {line_break}
+  --config_file accelerate_config.yaml {line_break}
   --mixed_precision bf16 {line_break}
   --num_cpu_threads_per_process 1 {line_break}
   sd-scripts/flux_train_network.py {line_break}
@@ -265,7 +266,8 @@ def build_train_script(
   --network_module networks.lora_flux {line_break}
   --network_dim {network_dim} {line_break}
   --network_alpha {network_alpha} {line_break}
-  {optimizer}{sample}--learning_rate {learning_rate} {line_break}
+  {optimizer}
+  {sample}--learning_rate {learning_rate} {line_break}
   --cache_text_encoder_outputs {line_break}
   --cache_text_encoder_outputs_to_disk {line_break}
   --fp8_base {line_break}
@@ -879,7 +881,10 @@ def page_train() -> None:
                             cmd = script_path if platform.system().lower().startswith('win') else f"bash \"{script_path}\""
                             if current_slot:
                                 with current_slot:
-                                    ui_log(f"[LAUNCH] {cmd}")
+                                    ui_log(f"[LAUNCH] Starting training with command: {cmd}")
+                                    ui_log(f"[DEBUG] Working directory: {ROOT}")
+                                    ui_log(f"[DEBUG] Script exists: {os.path.exists(script_path)}")
+                                    ui_log(f"[DEBUG] Dataset exists: {os.path.exists(os.path.join(ROOT, 'datasets', 'uygug'))}")
                             
                             # Set UTF-8 environment for subprocess
                             env = os.environ.copy()
@@ -887,71 +892,49 @@ def page_train() -> None:
                             env['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
                             env['PYTHONUTF8'] = '1'
                             
-                            # Create a log file for output
-                            import tempfile
-                            log_file = os.path.join(ROOT, 'training_output.log')
-                            
-                            # Modify command to redirect output to file
-                            if platform.system().lower().startswith('win'):
-                                cmd_with_redirect = f'{cmd} > "{log_file}" 2>&1'
-                            else:
-                                cmd_with_redirect = f'{cmd} > "{log_file}" 2>&1'
-                            
+                            # Use simpler process launch without redirection for now
                             proc = subprocess.Popen(
-                                cmd_with_redirect,
+                                cmd,
                                 cwd=ROOT,
                                 shell=True,
-                                start_new_session=True,
-                                env=env
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                text=True,
+                                bufsize=1,
+                                env=env,
+                                encoding='utf-8',
+                                errors='replace',
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system().lower().startswith('win') else 0
                             )
                             state['proc_handle'] = proc
                             global CURRENT_PROC
                             CURRENT_PROC = proc
                             
-                            # Read output from log file with termination checking
-                            import time
-                            last_position = 0
-                            
+                            # Read output with termination checking
                             while True:
-                                if state.get('proc_handle') is None:  # Process was stopped
+                                try:
+                                    line = proc.stdout.readline()
+                                    if not line:  # Process ended
+                                        break
+                                    if state.get('proc_handle') is None:  # Process was stopped
+                                        if current_slot:
+                                            with current_slot:
+                                                ui_log("[STOP] Process termination detected")
+                                        break
                                     if current_slot:
                                         with current_slot:
-                                            ui_log("[STOP] Process termination detected")
+                                            ui_log(line.rstrip('\n'))
+                                except UnicodeDecodeError:
+                                    # Skip problematic lines instead of crashing
+                                    if current_slot:
+                                        with current_slot:
+                                            ui_log("[ENCODING] Skipped line with encoding issues")
+                                    continue
+                                except Exception as e:
+                                    if current_slot:
+                                        with current_slot:
+                                            ui_log(f"[OUTPUT ERROR] {e}")
                                     break
-                                
-                                # Check if process is still running
-                                if proc.poll() is not None:  # Process ended
-                                    break
-                                
-                                # Read new lines from log file
-                                try:
-                                    if os.path.exists(log_file):
-                                        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                                            f.seek(last_position)
-                                            new_lines = f.readlines()
-                                            last_position = f.tell()
-                                            
-                                            for line in new_lines:
-                                                if current_slot:
-                                                    with current_slot:
-                                                        ui_log(line.rstrip('\n'))
-                                except Exception:
-                                    pass  # Ignore file reading errors
-                                
-                                time.sleep(0.5)  # Check every 0.5 seconds
-                            
-                            # Final read of any remaining output
-                            try:
-                                if os.path.exists(log_file):
-                                    with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                                        f.seek(last_position)
-                                        remaining_lines = f.readlines()
-                                        for line in remaining_lines:
-                                            if current_slot:
-                                                with current_slot:
-                                                    ui_log(line.rstrip('\n'))
-                            except Exception:
-                                pass
                             
                             # Wait for process to finish
                             proc.wait()
@@ -962,13 +945,6 @@ def page_train() -> None:
                                         ui_log("[COMPLETE] Training completed successfully")
                                     else:
                                         ui_log(f"[COMPLETE] Training ended with code {return_code}")
-                            
-                            # Clean up log file
-                            try:
-                                if os.path.exists(log_file):
-                                    os.remove(log_file)
-                            except Exception:
-                                pass
                                         
                         except Exception as e:
                             if current_slot:
