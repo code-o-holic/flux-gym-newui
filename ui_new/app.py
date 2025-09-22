@@ -215,6 +215,7 @@ def build_train_script(
 ) -> str:
     line_break = "^" if platform.system().lower().startswith('win') else "\\"
 
+    # Use original path resolution (match app.py exactly)
     model_cfg = models_cfg.get(base_model_key, {})
     repo = model_cfg.get('repo')
     file_name = model_cfg.get('file')
@@ -222,39 +223,52 @@ def build_train_script(
         model_folder = 'models/unet'
     else:
         model_folder = f"models/unet/{repo}"
-    pretrained_model_path = os.path.join(model_folder, file_name)
+    model_path = os.path.join(model_folder, file_name)
+    pretrained_model_path = resolve_path(model_path)
 
-    clip_path = 'models/clip/clip_l.safetensors'
-    t5_path = 'models/clip/t5xxl_fp16.safetensors'
-    ae_path = 'models/vae/ae.sft'
-
-    output_dir_path = os.path.join(OUTPUTS_DIR, output_name)
-    output_dir_q = f'"{output_dir_path}"'
-    dataset_toml_q = f'"{os.path.join(output_dir_path, "dataset.toml")}"'
-    sample_prompts_q = f'"{os.path.join(output_dir_path, "sample_prompts.txt")}"'
-    logs_dir_q = f'"{os.path.join(output_dir_path, "logs")}"'
+    # Use original path resolution approach (exact copy)
+    def resolve_path(p):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Go up one level since we're in ui_new/
+        current_dir = os.path.dirname(current_dir)
+        norm_path = os.path.normpath(os.path.join(current_dir, p))
+        return f'"{norm_path}"'
+    
+    def resolve_path_without_quotes(p):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Go up one level since we're in ui_new/
+        current_dir = os.path.dirname(current_dir)
+        norm_path = os.path.normpath(os.path.join(current_dir, p))
+        return norm_path
+    
+    clip_path = resolve_path('models/clip/clip_l.safetensors')
+    t5_path = resolve_path('models/clip/t5xxl_fp16.safetensors')
+    ae_path = resolve_path('models/vae/ae.sft')
+    
+    output_dir_q = resolve_path(f"outputs/{output_name}")
+    dataset_toml_q = resolve_path(f"outputs/{output_name}/dataset.toml")
+    sample_prompts_q = resolve_path(f"outputs/{output_name}/sample_prompts.txt")
 
     if vram == '16G':
         optimizer = f"--optimizer_type adafactor {line_break}\n  --optimizer_args \"relative_step=False\" \"scale_parameter=False\" \"warmup_init=False\" {line_break}\n  --lr_scheduler constant_with_warmup {line_break}\n  --max_grad_norm 0.0 {line_break}"
     elif vram == '12G':
         optimizer = f"--optimizer_type adafactor {line_break}\n  --optimizer_args \"relative_step=False\" \"scale_parameter=False\" \"warmup_init=False\" {line_break}\n  --split_mode {line_break}\n  --network_args \"train_blocks=single\" {line_break}\n  --lr_scheduler constant_with_warmup {line_break}\n  --max_grad_norm 0.0 {line_break}"
     else:
-        # Use regular AdamW instead of 8bit version for better compatibility
-        optimizer = f"--optimizer_type AdamW {line_break}"
+        # 20G+ VRAM (match original)
+        optimizer = f"--optimizer_type adamw8bit {line_break}"
 
     sample = ""
     if sample_prompts_present and sample_every_n_steps > 0:
         sample = f"--sample_prompts={sample_prompts_q} --sample_every_n_steps=\"{sample_every_n_steps}\" {line_break}\n  "
 
     base = f"""accelerate launch {line_break}
-  --config_file accelerate_config.yaml {line_break}
   --mixed_precision bf16 {line_break}
   --num_cpu_threads_per_process 1 {line_break}
   sd-scripts/flux_train_network.py {line_break}
-  --pretrained_model_name_or_path \"{pretrained_model_path}\" {line_break}
-  --clip_l \"{clip_path}\" {line_break}
-  --t5xxl \"{t5_path}\" {line_break}
-  --ae \"{ae_path}\" {line_break}
+  --pretrained_model_name_or_path {pretrained_model_path} {line_break}
+  --clip_l {clip_path} {line_break}
+  --t5xxl {t5_path} {line_break}
+  --ae {ae_path} {line_break}
   --cache_latents_to_disk {line_break}
   --save_model_as safetensors {line_break}
   --sdpa --persistent_data_loader_workers {line_break}
@@ -281,13 +295,55 @@ def build_train_script(
   --discrete_flow_shift 3.1582 {line_break}
   --model_prediction_type raw {line_break}
   --guidance_scale {guidance_scale} {line_break}
-  --loss_type l2 {line_break}
-  --logging_dir {logs_dir_q} {line_break}
-  --log_with tensorboard"""
+  --loss_type l2 {line_break}"""
 
     if advanced_flags:
         base += "\n  " + f" {line_break}\n  ".join(advanced_flags)
     return base
+
+
+def download_models(base_model: str, models_cfg: Dict[str, Any], log_fn: Optional[Callable[[str], None]] = None) -> None:
+    """Download required models (exact copy of original download function)"""
+    model = models_cfg[base_model]
+    model_file = model["file"]
+    repo = model["repo"]
+
+    # download unet
+    if base_model == "flux-dev" or base_model == "flux-schnell":
+        unet_folder = "models/unet"
+    else:
+        unet_folder = f"models/unet/{repo}"
+    unet_path = os.path.join(unet_folder, model_file)
+    if not os.path.exists(unet_path):
+        os.makedirs(unet_folder, exist_ok=True)
+        if log_fn: log_fn(f"Downloading base model: {base_model}. Please wait.")
+        print(f"download {base_model}")
+        hf_hub_download(repo_id=repo, local_dir=unet_folder, filename=model_file)
+
+    # download vae
+    vae_folder = "models/vae"
+    vae_path = os.path.join(vae_folder, "ae.sft")
+    if not os.path.exists(vae_path):
+        os.makedirs(vae_folder, exist_ok=True)
+        if log_fn: log_fn(f"Downloading vae")
+        print(f"downloading ae.sft...")
+        hf_hub_download(repo_id="cocktailpeanut/xulf-dev", local_dir=vae_folder, filename="ae.sft")
+
+    # download clip
+    clip_folder = "models/clip"
+    clip_l_path = os.path.join(clip_folder, "clip_l.safetensors")
+    if not os.path.exists(clip_l_path):
+        os.makedirs(clip_folder, exist_ok=True)
+        if log_fn: log_fn(f"Downloading clip...")
+        print(f"download clip_l.safetensors")
+        hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="clip_l.safetensors")
+
+    # download t5xxl
+    t5xxl_path = os.path.join(clip_folder, "t5xxl_fp16.safetensors")
+    if not os.path.exists(t5xxl_path):
+        print(f"download t5xxl_fp16.safetensors")
+        if log_fn: log_fn(f"Downloading t5xxl...")
+        hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="t5xxl_fp16.safetensors")
 
 
 def write_and_launch_run(
@@ -324,44 +380,7 @@ def write_and_launch_run(
     # Include user-edited captions
     generate_dataset(dataset_folder, uploaded_files, resize_to, caption_rows=caption_rows)
 
-    # Ensure required models are present (download if missing)
-    try:
-        models_yaml = read_models()
-        model_cfg = models_yaml.get(base_model, {})
-        repo = model_cfg.get('repo')
-        file_name = model_cfg.get('file')
-        # unet
-        if base_model in ('flux-dev', 'flux-schnell'):
-            unet_folder = os.path.join(ROOT, 'models', 'unet')
-        else:
-            unet_folder = os.path.join(ROOT, 'models', 'unet', repo or '')
-        os.makedirs(unet_folder, exist_ok=True)
-        unet_path = os.path.join(unet_folder, file_name or '')
-        if file_name and not os.path.exists(unet_path):
-            if log_fn: log_fn(f'Downloading base model: {base_model} ...')
-            hf_hub_download(repo_id=repo, local_dir=unet_folder, filename=file_name)
-            if log_fn: log_fn('Base model download complete')
-        # vae
-        vae_folder = os.path.join(ROOT, 'models', 'vae')
-        os.makedirs(vae_folder, exist_ok=True)
-        vae_path = os.path.join(vae_folder, 'ae.sft')
-        if not os.path.exists(vae_path):
-            if log_fn: log_fn('Downloading VAE ...')
-            hf_hub_download(repo_id='cocktailpeanut/xulf-dev', local_dir=vae_folder, filename='ae.sft')
-            if log_fn: log_fn('VAE download complete')
-        # clip/text encoders
-        clip_folder = os.path.join(ROOT, 'models', 'clip')
-        os.makedirs(clip_folder, exist_ok=True)
-        if not os.path.exists(os.path.join(clip_folder, 'clip_l.safetensors')):
-            if log_fn: log_fn('Downloading CLIP L ...')
-            hf_hub_download(repo_id='comfyanonymous/flux_text_encoders', local_dir=clip_folder, filename='clip_l.safetensors')
-            if log_fn: log_fn('CLIP L download complete')
-        if not os.path.exists(os.path.join(clip_folder, 't5xxl_fp16.safetensors')):
-            if log_fn: log_fn('Downloading T5 XXL fp16 ...')
-            hf_hub_download(repo_id='comfyanonymous/flux_text_encoders', local_dir=clip_folder, filename='t5xxl_fp16.safetensors')
-            if log_fn: log_fn('T5 XXL download complete')
-    except Exception:
-        pass
+    # Models are downloaded separately now (like original)
 
     # toml
     toml_path = os.path.join(output_dir, 'dataset.toml')
@@ -837,6 +856,13 @@ def page_train() -> None:
                                 pass
                         
                         try:
+                            # Download models first (critical step from original)
+                            download_models(
+                                base_model=state['base_model'].value or (model_names[0] if model_names else ''),
+                                models_cfg=models_cfg,
+                                log_fn=log_fn
+                            )
+                            
                             script_path, toml_path = write_and_launch_run(
                                 lora_name=state['lora_name'].value or 'run',
                                 concept_sentence=state['concept_sentence'].value or '',
@@ -886,16 +912,19 @@ def page_train() -> None:
                                     ui_log(f"[DEBUG] Script exists: {os.path.exists(script_path)}")
                                     ui_log(f"[DEBUG] Dataset exists: {os.path.exists(os.path.join(ROOT, 'datasets', 'uygug'))}")
                             
-                            # Set UTF-8 environment for subprocess
+                            # Set UTF-8 environment (match original)
                             env = os.environ.copy()
-                            env['PYTHONIOENCODING'] = 'utf-8:replace'
-                            env['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
-                            env['PYTHONUTF8'] = '1'
+                            env['PYTHONIOENCODING'] = 'utf-8'
+                            env['LOG_LEVEL'] = 'DEBUG'
                             
-                            # Use simpler process launch without redirection for now
+                            # Use working directory like original
+                            cwd = os.path.dirname(os.path.abspath(__file__))
+                            # But we're in ui_new/, so go up one level to match original
+                            cwd = os.path.dirname(cwd)
+                            
                             proc = subprocess.Popen(
                                 cmd,
-                                cwd=ROOT,
+                                cwd=cwd,
                                 shell=True,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
