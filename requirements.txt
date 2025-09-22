@@ -33,3 +33,7 @@ gradio
 python-slugify
 imagesize
 pydantic==2.9.2
+nicegui>=1.4.20
+psutil
+pynvml
+tensorboard-data-server
