@@ -1,11 +1,23 @@
-# Flux Gym
+# FluxGym New UI
 
-Dead simple web UI for training FLUX LoRA **with LOW VRAM (12GB/16GB/20GB) support.**
+Modern, responsive web UI for training FLUX LoRA **with LOW VRAM (12GB/16GB/20GB) support.**
 
-- **Frontend:** The WebUI forked from [AI-Toolkit](https://github.com/ostris/ai-toolkit) (Gradio UI created by https://x.com/multimodalart)
-- **Backend:** The Training script powered by [Kohya Scripts](https://github.com/kohya-ss/sd-scripts)
+- **Frontend:** Brand new NiceGUI-based interface with improved UX
+- **Backend:** Training powered by [Kohya Scripts](https://github.com/kohya-ss/sd-scripts) (as submodule)
+- **Features:** Real-time training monitoring, automatic caption generation, drag-and-drop uploads
 
-FluxGym supports 100% of Kohya sd-scripts features through an [Advanced](#advanced) tab, which is hidden by default.
+## 🚀 Quick Start
+
+**Important:** Clone with submodules!
+
+```bash
+git clone --recurse-submodules https://github.com/code-o-holic/flux-gym-newui.git
+cd flux-gym-newui
+pip install -r requirements.txt
+python ui_new/app.py
+```
+
+📖 **[Full Installation Guide](INSTALL.md)** | 🌐 **Interface:** http://localhost:7861
 
 ![screenshot.png](screenshot.png)
 
