@@ -879,6 +879,11 @@ def page_train() -> None:
                                 with current_slot:
                                     ui_log(f"[LAUNCH] {cmd}")
                             
+                            # Set UTF-8 environment for subprocess
+                            env = os.environ.copy()
+                            env['PYTHONIOENCODING'] = 'utf-8'
+                            env['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
+                            
                             proc = subprocess.Popen(
                                 cmd,
                                 cwd=ROOT,
@@ -888,6 +893,9 @@ def page_train() -> None:
                                 text=True,
                                 bufsize=1,
                                 start_new_session=True,
+                                env=env,
+                                encoding='utf-8',
+                                errors='replace'
                             )
                             state['proc_handle'] = proc
                             global CURRENT_PROC
