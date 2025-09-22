@@ -239,7 +239,8 @@ def build_train_script(
     elif vram == '12G':
         optimizer = f"--optimizer_type adafactor {line_break}\n  --optimizer_args \"relative_step=False\" \"scale_parameter=False\" \"warmup_init=False\" {line_break}\n  --split_mode {line_break}\n  --network_args \"train_blocks=single\" {line_break}\n  --lr_scheduler constant_with_warmup {line_break}\n  --max_grad_norm 0.0 {line_break}"
     else:
-        optimizer = f"--optimizer_type adamw8bit {line_break}"
+        # Use regular AdamW instead of 8bit version for better compatibility
+        optimizer = f"--optimizer_type AdamW {line_break}"
 
     sample = ""
     if sample_prompts_present and sample_every_n_steps > 0:
@@ -279,7 +280,8 @@ def build_train_script(
   --model_prediction_type raw {line_break}
   --guidance_scale {guidance_scale} {line_break}
   --loss_type l2 {line_break}
-  --logging_dir {logs_dir_q}"""
+  --logging_dir {logs_dir_q} {line_break}
+  --log_with tensorboard"""
 
     if advanced_flags:
         base += "\n  " + f" {line_break}\n  ".join(advanced_flags)
@@ -1053,12 +1055,23 @@ def page_metrics() -> None:
 
     runs = list_runs()
     state: Dict[str, Any] = {}
+    
+    def refresh_runs_list():
+        """Refresh the runs dropdown with current training runs"""
+        runs = list_runs()
+        state['primary'].options = runs
+        state['overlays'].options = runs
+        if runs and not state['primary'].value:
+            state['primary'].value = runs[0]
+        return runs
+    
     with ui.row():
         state['primary'] = ui.select(options=runs, label='Primary run', value=(runs[0] if runs else None))
         state['overlays'] = ui.select(options=runs, label='Overlay runs (optional)', multiple=True)
-        state['autorefresh'] = ui.toggle(['Auto-refresh']).props('keep-color')
+        state['autorefresh'] = ui.toggle(['Auto-refresh'], value=[True]).props('keep-color')
         state['interval'] = ui.number(label='Interval (seconds)', value=2, format='%.0f')
         refresh_btn = ui.button('Refresh Now')
+        refresh_runs_btn = ui.button('Refresh Runs List', on_click=lambda: refresh_runs_list())
 
     ui.separator()
     ui.markdown('#### Health & Progress')
@@ -1104,17 +1117,24 @@ def page_metrics() -> None:
             return {}
 
     def update_metrics() -> None:
+        # Auto-refresh runs list to catch new training runs
+        refresh_runs_list()
+        
         primary = state['primary'].value
         overlays = state['overlays'].value or []
         all_runs = [primary] + [r for r in overlays if r and r != primary]
         series_loss = []
         series_lr = []
         x_axis = []
+        
         for idx, run_path in enumerate([r for r in all_runs if r]):
             logs_dir = os.path.join(run_path, 'logs')
             scalars = load_tb_scalars(logs_dir)
-            loss = scalars.get('loss') or scalars.get('train/loss') or []
-            lr = scalars.get('lr') or scalars.get('learning_rate') or []
+            
+            # Try multiple loss tag names
+            loss = scalars.get('loss') or scalars.get('train/loss') or scalars.get('training_loss') or []
+            lr = scalars.get('lr') or scalars.get('learning_rate') or scalars.get('train/lr') or []
+            
             steps = [s for s, _ in loss]
             losses = [v for _, v in loss]
             lrs = [v for _, v in lr]
@@ -1126,11 +1146,22 @@ def page_metrics() -> None:
 
             # update header
             if idx == 0 and steps:
-                state['progress'].text = f'Progress: {steps[-1]}/{steps[-1]}'
+                state['progress'].text = f'Progress: {steps[-1]} steps'
                 if losses:
                     state['curr_loss'].text = f'Current Loss: {losses[-1]:.4f}'
                 if lrs:
                     state['curr_lr'].text = f'Learning Rate: {lrs[-1]:.2e}'
+                    
+            # Update health status
+            if idx == 0:
+                if scalars:
+                    available_tags = list(scalars.keys())
+                    state['health'].text = f'Tracking: {", ".join(available_tags[:3])}'
+                    state['health'].classes('text-green-600')
+                else:
+                    logs_exists = os.path.exists(logs_dir)
+                    state['health'].text = f'Logs dir exists: {logs_exists} | Path: {logs_dir}'
+                    state['health'].classes('text-amber-600')
 
             # samples per prompt index
             try:
