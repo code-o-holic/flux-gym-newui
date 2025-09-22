@@ -881,39 +881,75 @@ def page_train() -> None:
                             
                             # Set UTF-8 environment for subprocess
                             env = os.environ.copy()
-                            env['PYTHONIOENCODING'] = 'utf-8'
+                            env['PYTHONIOENCODING'] = 'utf-8:replace'
                             env['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
+                            env['PYTHONUTF8'] = '1'
+                            
+                            # Create a log file for output
+                            import tempfile
+                            log_file = os.path.join(ROOT, 'training_output.log')
+                            
+                            # Modify command to redirect output to file
+                            if platform.system().lower().startswith('win'):
+                                cmd_with_redirect = f'{cmd} > "{log_file}" 2>&1'
+                            else:
+                                cmd_with_redirect = f'{cmd} > "{log_file}" 2>&1'
                             
                             proc = subprocess.Popen(
-                                cmd,
+                                cmd_with_redirect,
                                 cwd=ROOT,
                                 shell=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT,
-                                text=True,
-                                bufsize=1,
                                 start_new_session=True,
-                                env=env,
-                                encoding='utf-8',
-                                errors='replace'
+                                env=env
                             )
                             state['proc_handle'] = proc
                             global CURRENT_PROC
                             CURRENT_PROC = proc
                             
-                            # Read output with termination checking
+                            # Read output from log file with termination checking
+                            import time
+                            last_position = 0
+                            
                             while True:
-                                line = proc.stdout.readline()
-                                if not line:  # Process ended
-                                    break
                                 if state.get('proc_handle') is None:  # Process was stopped
                                     if current_slot:
                                         with current_slot:
                                             ui_log("[STOP] Process termination detected")
                                     break
-                                if current_slot:
-                                    with current_slot:
-                                        ui_log(line.rstrip('\n'))
+                                
+                                # Check if process is still running
+                                if proc.poll() is not None:  # Process ended
+                                    break
+                                
+                                # Read new lines from log file
+                                try:
+                                    if os.path.exists(log_file):
+                                        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                                            f.seek(last_position)
+                                            new_lines = f.readlines()
+                                            last_position = f.tell()
+                                            
+                                            for line in new_lines:
+                                                if current_slot:
+                                                    with current_slot:
+                                                        ui_log(line.rstrip('\n'))
+                                except Exception:
+                                    pass  # Ignore file reading errors
+                                
+                                time.sleep(0.5)  # Check every 0.5 seconds
+                            
+                            # Final read of any remaining output
+                            try:
+                                if os.path.exists(log_file):
+                                    with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                                        f.seek(last_position)
+                                        remaining_lines = f.readlines()
+                                        for line in remaining_lines:
+                                            if current_slot:
+                                                with current_slot:
+                                                    ui_log(line.rstrip('\n'))
+                            except Exception:
+                                pass
                             
                             # Wait for process to finish
                             proc.wait()
@@ -924,6 +960,13 @@ def page_train() -> None:
                                         ui_log("[COMPLETE] Training completed successfully")
                                     else:
                                         ui_log(f"[COMPLETE] Training ended with code {return_code}")
+                            
+                            # Clean up log file
+                            try:
+                                if os.path.exists(log_file):
+                                    os.remove(log_file)
+                            except Exception:
+                                pass
                                         
                         except Exception as e:
                             if current_slot:

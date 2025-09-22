@@ -108,6 +108,7 @@ runs/
 wandb/
 tensorboard_logs/
 *.log
+training_output.log
 
 # Temporary files
 tmp/
